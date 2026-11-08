@@ -1,0 +1,25 @@
+{
+  "_说明": [
+    "这是模板。复制一份改名为 agent.config.json，填上自己的值，然后双击 start.bat。",
+    "host / port：Minecraft 服务器的地址和端口。",
+    "auth：offline = 离线/盗版服；microsoft = 正版验证服（首次运行按提示设备码登录）。",
+    "name：游戏里的玩家 ID，1-16 位字母、数字或下划线。",
+    "model：提供商/模型ID，例如 deepseek/deepseek-v4-flash、openai/gpt-6.1-terra、anthropic/claude-sonnet-4-5。",
+    "apiKey：上面那个提供商的密钥。填在这里就不需要 .env 了。",
+    "minecraftVersion：跟服务器的协议版本。比服务器老、且服务器装了 ViaVersion/ViaBackwards 时，填老版本能连。",
+    "sandbox：none | local | docker | e2b。Windows 上建议 none。",
+    "objective：开局要做的事，必填。",
+    "durationMinutes：可选，跑多少分钟后自动收工。"
+  ],
+  "host": "127.0.0.1",
+  "port": 25565,
+  "auth": "offline",
+  "minecraftVersion": "1.21.8",
+  "name": "Scout",
+  "gameMode": "survival",
+  "model": "deepseek/deepseek-v4-flash",
+  "apiKey": "PUT_YOUR_API_KEY_HERE",
+  "thinking": "medium",
+  "sandbox": "none",
+  "objective": "Explore the area around spawn, gather wood, and report what you find."
+}

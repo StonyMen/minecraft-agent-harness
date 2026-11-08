@@ -112,6 +112,9 @@ export function resolveConfig(
         if (!(minutes > 0)) errors.push('durationMinutes must be a positive number');
         else deadlineAt = new Date(now + minutes * 60000).toISOString();
     }
+    const apiKey = raw.apiKey ?? (raw.baseUrl ? env.MODEL_API_KEY : undefined);
+    if (apiKey !== undefined && raw.apiKey !== undefined && typeof raw.apiKey !== 'string')
+        errors.push('apiKey must be a string');
     if (errors.length) throw Object.assign(new Error(errors.join('\n')), { code: 'INVALID_CONFIG' });
     const stateDir = path.resolve(cwd, raw.stateDir);
     const soul = raw.soul ?? (raw.soulFile ? readFileSync(path.resolve(cwd, raw.soulFile), 'utf8') : undefined);
@@ -136,7 +139,7 @@ export function resolveConfig(
                 ? { headers: { [raw.apiKeyHeader]: env.MODEL_API_KEY } }
                 : {}),
         },
-        apiKey: raw.baseUrl ? env.MODEL_API_KEY : undefined,
+        apiKey: typeof apiKey === 'string' && apiKey.trim() ? apiKey.trim() : undefined,
         modelsPath: raw.modelsFile ? path.resolve(cwd, raw.modelsFile) : null,
         thinking: raw.thinking,
         tickRate,
