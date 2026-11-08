@@ -44,41 +44,18 @@ export const WOOL_COLORS = [
     'black',
 ];
 
-const ASCII_MAP = [
-    [/[\u2010-\u2015\u2212]/g, '-'],
-    [/[\u2018\u2019\u201a\u201b\u2032]/g, "'"],
-    [/[\u201c\u201d\u201e\u201f\u2033]/g, '"'],
-    [/\u2026/g, '...'],
-    [/[\u2022\u00b7]/g, '*'],
-    [/\u00d7/g, 'x'],
-    [/\u2192/g, '->'],
-    [/\u2190/g, '<-'],
-    [/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, ' '],
-];
-
-export function asciiSafe(text) {
-    let out = String(text ?? '');
-    for (const [pattern, replacement] of ASCII_MAP) out = out.replace(pattern, replacement);
-    return out
-        .normalize('NFKD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\x20-\x7e]/g, '')
-        .replace(/ {2,}/g, ' ');
-}
-
-export function installAsciiChat(bot) {
-    if (typeof bot.chat !== 'function' || bot.chat.asciiSafe) return bot;
-    const rawChat = bot.chat.bind(bot);
-    const chat = message => rawChat(asciiSafe(message));
-    chat.asciiSafe = true;
-    bot.chat = chat;
-    if (typeof bot.whisper === 'function') {
-        const rawWhisper = bot.whisper.bind(bot);
-        bot.whisper = (username, message) => {
-            allowWhisper(bot._client ?? {}, username);
-            return rawWhisper(username, asciiSafe(message));
-        };
-    }
+// Chat goes out verbatim: no transliteration, no character filtering. Whatever the
+// model chose to say is what players read, including Chinese, accents and emoji.
+// The only thing this installs is the whisper allowance the chat guard needs.
+export function installWhisperAllowance(bot) {
+    if (typeof bot.whisper !== 'function' || bot.whisper.allowsWhisper) return bot;
+    const rawWhisper = bot.whisper.bind(bot);
+    const whisper = (username, message) => {
+        allowWhisper(bot._client ?? {}, username);
+        return rawWhisper(username, String(message ?? ''));
+    };
+    whisper.allowsWhisper = true;
+    bot.whisper = whisper;
     return bot;
 }
 
@@ -245,7 +222,7 @@ export function initBot(username) {
     const bot = createBot(options);
 
     installClientTick(bot);
-    bot.once('login', () => installAsciiChat(bot));
+    bot.once('login', () => installWhisperAllowance(bot));
 
     const originalEmit = bot._client.emit.bind(bot._client);
     bot._client.emit = function (event, ...args) {
