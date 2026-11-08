@@ -132,7 +132,7 @@ function protocolHasTickEnd(version) {
  */
 export function installClientTick(
     bot,
-    { intervalMs = 50, clock = { now: Date.now, setTimeout, clearTimeout }, log = () => {} } = {},
+    { intervalMs = 50, clock = { setInterval, clearInterval }, log = () => {} } = {},
 ) {
     const client = bot?._client;
     if (!client || typeof client.write !== 'function') return null;
@@ -148,52 +148,73 @@ export function installClientTick(
         return lastTickEnd;
     };
 
+    // Keep whole payloads: `look` and `position` both carry a MovementFlags field, and dropping it
+    // makes protodef fail mid-serialization, which nmp reports as a fatal client error.
+    const snapshot = data => ({ ...(data ?? {}) });
+
     const flush = () => {
-        timer = null;
         const batch = pending;
         pending = null;
-        if (!batch) return;
-        try {
-            if (batch.position && batch.look) {
-                originalWrite('position_look', { ...batch.position, yaw: batch.look.yaw, pitch: batch.look.pitch });
-            } else if (batch.position) {
-                originalWrite('position', batch.position);
-            } else if (batch.look) {
-                originalWrite('look', batch.look);
-            } else if (batch.flying) {
-                originalWrite('flying', batch.flying);
+        if (batch) {
+            const { position, look, flying } = batch;
+            try {
+                if (position && look) {
+                    originalWrite('position_look', {
+                        ...position,
+                        yaw: look.yaw,
+                        pitch: look.pitch,
+                        flags: look.flags ?? position.flags,
+                    });
+                } else if (position) {
+                    originalWrite('position', position);
+                } else if (look) {
+                    originalWrite('look', look);
+                } else if (flying) {
+                    originalWrite('flying', flying);
+                }
+            } catch (e) {
+                log(`client_tick_flush_failed: ${e?.message ?? e}`);
             }
-            if (batch.position || batch.look || batch.flying) {
-                if (supportsTickEnd()) originalWrite('tick_end', {});
+        }
+        // Close every tick, not just ticks that carried movement: the server treats a missing
+        // tick_end as a stalled client and keeps resyncing the player back to its last position.
+        if (supportsTickEnd()) {
+            try {
+                originalWrite('tick_end', {});
+            } catch (e) {
+                lastTickEnd = false;
+                log(`client_tick_end_disabled: ${e?.message ?? e}`);
             }
-        } catch (e) {
-            log(`client_tick_flush_failed: ${e?.message ?? e}`);
         }
     };
 
-    const schedule = () => {
+    const start = () => {
         if (timer) return;
-        timer = clock.setTimeout(flush, intervalMs);
+        timer = clock.setInterval(flush, intervalMs);
         if (typeof timer?.unref === 'function') timer.unref();
     };
 
     client.write = function (name, data) {
+        if (name === 'tick_end') return undefined;
         if (client.state !== 'play' || !TICK_PACKETS.has(name)) return originalWrite(name, data);
-        pending ??= {};
-        if (name === 'position' || name === 'position_look') {
-            const { yaw, pitch, ...rest } = data ?? {};
-            pending.position = { ...rest };
-            if (name === 'position_look') pending.look = { yaw, pitch };
+        start();
+        const snap = snapshot(data);
+        if (name === 'position') {
+            pending = { ...pending, position: snap, flying: null };
+        } else if (name === 'position_look') {
+            pending = { ...pending, position: snap, look: snap, flying: null };
         } else if (name === 'look') {
-            pending.look = { yaw: data?.yaw, pitch: data?.pitch };
+            pending = { ...pending, look: snap };
+        } else if (pending?.look && !pending.position) {
+            pending = { ...pending, look: { ...pending.look, flags: snap.flags ?? pending.look.flags } };
         } else {
-            pending.flying = { ...data };
+            pending = { ...pending, flying: snap };
         }
-        schedule();
+        return undefined;
     };
 
     const stop = () => {
-        if (timer) clock.clearTimeout(timer);
+        if (timer) clock.clearInterval(timer);
         timer = null;
         pending = null;
     };
