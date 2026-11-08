@@ -320,7 +320,11 @@ export async function createWorkspaceTools({
     limits: overrides = {},
     sesPath,
 } = {}) {
-    if (process.platform !== 'linux') throw new Error('Workspace tools require Linux descriptor paths.');
+    if (process.platform !== 'linux') {
+        // Confinement here relies on /proc/self/fd directory handles, which only exist on Linux.
+        // Off Linux the agent runs without its private note tools instead of failing to start.
+        return [];
+    }
     const limits = { ...DEFAULTS, ...overrides };
     for (const [key, value] of Object.entries(limits)) {
         if (!Object.hasOwn(DEFAULTS, key) || !Number.isSafeInteger(value) || value <= 0 || value > DEFAULTS[key]) {

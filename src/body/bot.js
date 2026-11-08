@@ -110,6 +110,101 @@ export function throttleMovementPackets(client, intervalMs = 50, clock = { now: 
     return client;
 }
 
+const TICK_PACKETS = new Set(['position', 'position_look', 'look', 'flying']);
+
+function protocolHasTickEnd(version) {
+    try {
+        const data = minecraftData(version);
+        const map = data?.protocol?.play?.toServer?.types?.packet?.[1]?.[0]?.type?.[1]?.mappings;
+        return map ? Object.values(map).includes('tick_end') : false;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Client tick shim for servers newer than the bundled protocol data (Paper 26.x behind ViaBackwards).
+ *
+ * 26.x servers only allow one position packet per client tick: `handleMovePlayer` disconnects when
+ * `receivedPositionThisTick` is already set, and that flag is only cleared by `serverbound/tick_end`.
+ * Mineflayer never sends `tick_end`, so the second position packet of a session is rejected with
+ * `invalid_player_movement`. Coalesce movement packets into one per 50 ms tick and close each tick.
+ */
+export function installClientTick(
+    bot,
+    { intervalMs = 50, clock = { now: Date.now, setTimeout, clearTimeout }, log = () => {} } = {},
+) {
+    const client = bot?._client;
+    if (!client || typeof client.write !== 'function') return null;
+    if (client.__clientTick) return client.__clientTick;
+
+    const originalWrite = client.write.bind(client);
+    let pending = null;
+    let timer = null;
+    let lastTickEnd = null;
+
+    const supportsTickEnd = () => {
+        if (lastTickEnd === null) lastTickEnd = protocolHasTickEnd(bot.version);
+        return lastTickEnd;
+    };
+
+    const flush = () => {
+        timer = null;
+        const batch = pending;
+        pending = null;
+        if (!batch) return;
+        try {
+            if (batch.position && batch.look) {
+                originalWrite('position_look', { ...batch.position, yaw: batch.look.yaw, pitch: batch.look.pitch });
+            } else if (batch.position) {
+                originalWrite('position', batch.position);
+            } else if (batch.look) {
+                originalWrite('look', batch.look);
+            } else if (batch.flying) {
+                originalWrite('flying', batch.flying);
+            }
+            if (batch.position || batch.look || batch.flying) {
+                if (supportsTickEnd()) originalWrite('tick_end', {});
+            }
+        } catch (e) {
+            log(`client_tick_flush_failed: ${e?.message ?? e}`);
+        }
+    };
+
+    const schedule = () => {
+        if (timer) return;
+        timer = clock.setTimeout(flush, intervalMs);
+        if (typeof timer?.unref === 'function') timer.unref();
+    };
+
+    client.write = function (name, data) {
+        if (client.state !== 'play' || !TICK_PACKETS.has(name)) return originalWrite(name, data);
+        pending ??= {};
+        if (name === 'position' || name === 'position_look') {
+            const { yaw, pitch, ...rest } = data ?? {};
+            pending.position = { ...rest };
+            if (name === 'position_look') pending.look = { yaw, pitch };
+        } else if (name === 'look') {
+            pending.look = { yaw: data?.yaw, pitch: data?.pitch };
+        } else {
+            pending.flying = { ...data };
+        }
+        schedule();
+    };
+
+    const stop = () => {
+        if (timer) clock.clearTimeout(timer);
+        timer = null;
+        pending = null;
+    };
+    client.once('end', stop);
+    bot.once('kicked', stop);
+    client.once('error', stop);
+
+    client.__clientTick = { stop };
+    return client.__clientTick;
+}
+
 export function initBot(username) {
     mc_version = settings.minecraft_version;
     const options = {
@@ -128,7 +223,7 @@ export function initBot(username) {
 
     const bot = createBot(options);
 
-    throttleMovementPackets(bot._client);
+    installClientTick(bot);
     bot.once('login', () => installAsciiChat(bot));
 
     const originalEmit = bot._client.emit.bind(bot._client);
