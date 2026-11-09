@@ -23,7 +23,7 @@ export function createMovement(ctx) {
     add('stop_action', 'Cancel the current body action. Does not interrupt messaging.', {}, () => runner.stop());
     add(
         'go_to',
-        'Walk to coordinates. May dig through natural terrain (dirt, stone, sand, leaves...) and pillar up with dirt/cobblestone from your inventory; never breaks built blocks. Stops within `distance` blocks of the target (default 2) and reports where it actually stopped. Failures explain why and suggest a next step.',
+        'Default way to move. Walk to coordinates, pathfinding around obstacles. May dig through natural terrain (dirt, stone, sand, leaves...) and pillar up with dirt/cobblestone from your inventory; never breaks built blocks. Stops within `distance` blocks of the target (default 2) and reports where it actually stopped. Use this for every journey, however short; it handles walls, corners and steps that `move` walks straight into. Failures explain why and suggest a next step.',
         { ...coords, distance: number(0.5, 8) },
         async (a, { bot: active }) => {
             const tolerance = a.distance ?? 2;
@@ -123,7 +123,7 @@ export function createMovement(ctx) {
         );
     add(
         'move',
-        'Hold movement keys briefly; always releases at completion or cancellation.',
+        'Fallback only: prefer go_to. Hold movement keys briefly, for the few things a coordinate cannot express — backing off a ledge to look down, squeezing out when wedged against blocks, shifting while riding a boat or minecart or on a ladder, sneaking along an edge, or jumping while moving. It does not pathfind, so a held key walks straight into walls and steps until the time runs out: never use it to travel between places.',
         {
             controls: {
                 type: 'array',

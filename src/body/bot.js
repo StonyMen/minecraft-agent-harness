@@ -105,7 +105,12 @@ function protocolHasTickEnd(version) {
  * 26.x servers only allow one position packet per client tick: `handleMovePlayer` disconnects when
  * `receivedPositionThisTick` is already set, and that flag is only cleared by `serverbound/tick_end`.
  * Mineflayer never sends `tick_end`, so the second position packet of a session is rejected with
- * `invalid_player_movement`. Coalesce movement packets into one per 50 ms tick and close each tick.
+ * `invalid_player_movement`.
+ *
+ * A vanilla client emits `movement packet` + `tick_end` back to back at the end of its own tick, with
+ * no delay. This shim does the same: the first movement packet of a tick goes out immediately and is
+ * followed by `tick_end`; anything else inside the same tick is held until the next one, so the
+ * one-packet-per-tick rule still holds. Ticks that carry no movement are closed by the timer alone.
  */
 export function installClientTick(
     bot,
@@ -116,9 +121,10 @@ export function installClientTick(
     if (client.__clientTick) return client.__clientTick;
 
     const originalWrite = client.write.bind(client);
-    let pending = null;
     let timer = null;
     let lastTickEnd = null;
+    let tickClosed = false; // 本 tick 是否已经发过移动包（并发过 tick_end）
+    let queued = null; // 同一 tick 内多余的移动包，留到下一个 tick 的第一个位置
 
     const supportsTickEnd = () => {
         if (lastTickEnd === null) lastTickEnd = protocolHasTickEnd(bot.version);
@@ -129,71 +135,65 @@ export function installClientTick(
     // makes protodef fail mid-serialization, which nmp reports as a fatal client error.
     const snapshot = data => ({ ...(data ?? {}) });
 
-    const flush = () => {
-        const batch = pending;
-        pending = null;
-        if (batch) {
-            const { position, look, flying } = batch;
-            try {
-                if (position && look) {
-                    originalWrite('position_look', {
-                        ...position,
-                        yaw: look.yaw,
-                        pitch: look.pitch,
-                        flags: look.flags ?? position.flags,
-                    });
-                } else if (position) {
-                    originalWrite('position', position);
-                } else if (look) {
-                    originalWrite('look', look);
-                } else if (flying) {
-                    originalWrite('flying', flying);
-                }
-            } catch (e) {
-                log(`client_tick_flush_failed: ${e?.message ?? e}`);
-            }
+    const writeTickEnd = () => {
+        if (!supportsTickEnd()) return;
+        try {
+            originalWrite('tick_end', {});
+        } catch (e) {
+            lastTickEnd = false;
+            log(`client_tick_end_disabled: ${e?.message ?? e}`);
         }
-        // Close every tick, not just ticks that carried movement: the server treats a missing
-        // tick_end as a stalled client and keeps resyncing the player back to its last position.
-        if (supportsTickEnd()) {
-            try {
-                originalWrite('tick_end', {});
-            } catch (e) {
-                lastTickEnd = false;
-                log(`client_tick_end_disabled: ${e?.message ?? e}`);
-            }
+    };
+
+    // 原版客户端的顺序：移动包先落地，紧接着 tick_end 关掉这个 tick。
+    const sendMovement = entry => {
+        try {
+            originalWrite(entry.name, entry.data);
+        } catch (e) {
+            log(`client_tick_write_failed: ${e?.message ?? e}`);
+        }
+        writeTickEnd();
+        tickClosed = true;
+    };
+
+    // 两个 tick_end 之间 = 一个客户端 tick。空 tick 也要关，否则服务端当成客户端卡住。
+    const openTick = () => {
+        if (!tickClosed) writeTickEnd();
+        tickClosed = false;
+        if (queued) {
+            const entry = queued;
+            queued = null;
+            sendMovement(entry);
         }
     };
 
     const start = () => {
         if (timer) return;
-        timer = clock.setInterval(flush, intervalMs);
+        timer = clock.setInterval(() => {
+            if (client.state === 'play') openTick();
+        }, intervalMs);
         if (typeof timer?.unref === 'function') timer.unref();
     };
+    // 从登录开始就按拍关 tick，别等第一个移动包——空 tick 也要给服务端一个 tick_end。
+    start();
 
     client.write = function (name, data) {
         if (name === 'tick_end') return undefined;
         if (client.state !== 'play' || !TICK_PACKETS.has(name)) return originalWrite(name, data);
         start();
-        const snap = snapshot(data);
-        if (name === 'position') {
-            pending = { ...pending, position: snap, flying: null };
-        } else if (name === 'position_look') {
-            pending = { ...pending, position: snap, look: snap, flying: null };
-        } else if (name === 'look') {
-            pending = { ...pending, look: snap };
-        } else if (pending?.look && !pending.position) {
-            pending = { ...pending, look: { ...pending.look, flags: snap.flags ?? pending.look.flags } };
-        } else {
-            pending = { ...pending, flying: snap };
+        const entry = { name, data: snapshot(data) };
+        if (tickClosed) {
+            queued = entry;
+            return undefined;
         }
+        sendMovement(entry);
         return undefined;
     };
 
     const stop = () => {
         if (timer) clock.clearInterval(timer);
         timer = null;
-        pending = null;
+        queued = null;
     };
     client.once('end', stop);
     bot.once('kicked', stop);

@@ -982,7 +982,9 @@ export async function goToGoal(bot, goal) {
 
     let final_movements = destructiveMovements;
 
-    const pathfind_timeout = 1000;
+    // 1s was too tight: any non-trivial path timed out and we fell through to "no path found,
+    // walking anyway", which made every longer go_to fail and pushed the model onto key-holding.
+    const pathfind_timeout = 4000;
     if ((await bot.pathfinder.getPathTo(nonDestructiveMovements, goal, pathfind_timeout).status) === 'success') {
         final_movements = nonDestructiveMovements;
         log(bot, `Found non-destructive path.`);

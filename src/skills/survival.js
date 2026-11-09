@@ -111,6 +111,7 @@ export async function move(bot, controls, seconds) {
     }
     bot.pathfinder?.stop();
     bot.clearControlStates();
+    const startedAt = bot.entity.position.clone();
     try {
         if (bot.interrupt_code) return;
         for (const control of selected) bot.setControlState(control, true);
@@ -121,7 +122,16 @@ export async function move(bot, controls, seconds) {
     } finally {
         bot.clearControlStates();
     }
-    skills.log(bot, `Movement finished (${controls}, up to ${seconds}s).`);
+    const travelled = startedAt.distanceTo(bot.entity.position);
+    if (travelled < 0.4) {
+        // 按键撞在方块上只会原地耗时间；在这里点出来，模型才会改走 go_to 而不是反复按。
+        skills.log(
+            bot,
+            `Movement finished (${controls}, up to ${seconds}s) but you barely moved (${travelled.toFixed(2)} blocks) — something is blocking that direction. Use go_to with coordinates to route around it instead of holding keys again.`,
+        );
+    } else {
+        skills.log(bot, `Movement finished (${controls}, up to ${seconds}s).`);
+    }
 }
 
 export async function interact(bot, x, y, z) {
